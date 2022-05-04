@@ -87,6 +87,7 @@ const (
 
 	// key creation flags.
 	nCryptMachineKey   = 0x20 // NCRYPT_MACHINE_KEY_FLAG
+	nCryptNoMachineKey = 0x00 // Dummy flag if NCRYPT_MACHINE_KEY_FLAG is not to be used
 	nCryptOverwriteKey = 0x80 // NCRYPT_OVERWRITE_KEY_FLAG
 
 	// winerror.h constants
@@ -244,6 +245,7 @@ type WinCertStore struct {
 	intermediateIssuers []string
 	container           string
 	keyStorageFlags     uintptr
+	currentUserKey      bool
 	certChains          [][]*x509.Certificate
 	stores              map[string]*storeHandle
 
@@ -251,7 +253,9 @@ type WinCertStore struct {
 }
 
 // OpenWinCertStore creates a WinCertStore. Call Close() when finished using the store.
-func OpenWinCertStore(provider, container string, issuers, intermediateIssuers []string, legacyKey bool) (*WinCertStore, error) {
+// For TPM-based keys, they are stored as machine keys unless the
+// currentUserKey param is true.
+func OpenWinCertStore(provider, container string, issuers, intermediateIssuers []string, legacyKey bool, currentUserKey bool) (*WinCertStore, error) {
 	// Open a handle to the crypto provider we will use for private key operations
 	cngProv, err := openProvider(provider)
 	if err != nil {
@@ -265,6 +269,7 @@ func OpenWinCertStore(provider, container string, issuers, intermediateIssuers [
 		intermediateIssuers: intermediateIssuers,
 		container:           container,
 		stores:              make(map[string]*storeHandle),
+		currentUserKey:      currentUserKey,
 	}
 
 	if legacyKey {
@@ -308,6 +313,16 @@ func extractSimpleChain(simpleChain **windows.CertSimpleChain, chainCount, chain
 		chain = append(chain, xc)
 	}
 	return chain, nil
+}
+
+// Gets the dwFlags to be passed to ncrypt.dll, depending on the params
+// supplied to OpenWinCertStore.
+func (w* WinCertStore) getDwFlags() uintptr {
+	if (w.currentUserKey) {
+		return nCryptNoMachineKey
+	} else {
+		return nCryptMachineKey
+	}
 }
 
 // resolveCertChains builds chains to roots from a given certificate using the local machine store.
@@ -943,7 +958,7 @@ func (w *WinCertStore) Key() (Credential, error) {
 		uintptr(unsafe.Pointer(&kh)),
 		uintptr(unsafe.Pointer(wide(w.container))),
 		0,
-		nCryptMachineKey)
+		w.getDwFlags())
 	if r != 0 {
 		return nil, fmt.Errorf("NCryptOpenKey for container %q returned %X: %v", w.container, r, err)
 	}
@@ -1023,7 +1038,7 @@ func (w *WinCertStore) generateECDSA(algID string) (crypto.Signer, error) {
 		uintptr(unsafe.Pointer(wide(algID))),
 		uintptr(unsafe.Pointer(wide(w.container))),
 		0,
-		nCryptMachineKey|nCryptOverwriteKey)
+		w.getDwFlags()|nCryptOverwriteKey)
 	if r != 0 {
 		return nil, fmt.Errorf("NCryptCreatePersistedKey returned %X: %v", r, err)
 	}
@@ -1067,7 +1082,7 @@ func (w *WinCertStore) generateRSA(keySize int) (crypto.Signer, error) {
 		uintptr(unsafe.Pointer(wide("RSA"))),
 		uintptr(unsafe.Pointer(wide(w.container))),
 		0,
-		nCryptMachineKey|nCryptOverwriteKey)
+		w.getDwFlags()|nCryptOverwriteKey)
 	if r != 0 {
 		return nil, fmt.Errorf("NCryptCreatePersistedKey returned %X: %v", r, err)
 	}
