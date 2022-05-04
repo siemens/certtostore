@@ -952,6 +952,17 @@ func setACL(file, access, sid, perm string) error {
 // with a different provider. Use CertKey() to derive a key directly from a Cert in situations
 // where both are needed.
 func (w *WinCertStore) Key() (Credential, error) {
+
+	kh, err := w.KeyHandle()
+
+	if err != nil {
+		return nil, err
+	} else {
+		return keyMetadata(kh, w)
+	}
+}
+
+func (w *WinCertStore) KeyHandle() (uintptr, error) {
 	var kh uintptr
 	r, _, err := nCryptOpenKey.Call(
 		uintptr(w.Prov),
@@ -960,10 +971,10 @@ func (w *WinCertStore) Key() (Credential, error) {
 		0,
 		w.getDwFlags())
 	if r != 0 {
-		return nil, fmt.Errorf("NCryptOpenKey for container %q returned %X: %v", w.container, r, err)
+		return 0, fmt.Errorf("NCryptOpenKey for container %q returned %X: %v", w.container, r, err)
 	}
 
-	return keyMetadata(kh, w)
+	return kh, nil
 }
 
 // CertKey wraps CryptAcquireCertificatePrivateKey. It obtains the CNG private
